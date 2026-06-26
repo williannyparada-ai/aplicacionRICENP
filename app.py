@@ -37,9 +37,16 @@ with st.sidebar:
                 st.error(f"Error IA: {e}")
                 
     st.divider()
-    # NUEVO BOTÓN PARA REINICIAR
-    if st.button("🧹 LIMPIAR REGISTRO ACTUAL"):
+    
+    # --- BOTÓN DE LIMPIEZA TOTAL ---
+    if st.button("🧹 BORRAR TODO Y EMPEZAR DE CERO"):
+        # 1. Limpiar memoria
         st.session_state.datos_ia = {'cabecera': {}, 'items': {}}
+        # 2. Eliminar los archivos físicos si existen
+        for archivo_borrar in ["aprobados.xlsx", "rechazados.xlsx"]:
+            if os.path.exists(archivo_borrar):
+                os.remove(archivo_borrar)
+        st.success("¡Registros eliminados y memoria limpia!")
         st.rerun()
 
 # --- 4. FORMULARIO PRINCIPAL ---
@@ -93,7 +100,7 @@ with st.form("registro_maestro"):
             pd.concat([df_existente, df_nuevo], ignore_index=True)[orden_cols].to_excel(archivo_exc, index=False)
         else:
             df_nuevo.to_excel(archivo_exc, index=False)
-        st.success(f"Guardado en {archivo_exc}. ¡Ya puedes limpiar el registro si deseas!")
+        st.success(f"Guardado en {archivo_exc}")
 
 # --- 5. DESCARGAS ---
 st.divider()
