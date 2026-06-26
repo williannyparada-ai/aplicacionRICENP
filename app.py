@@ -6,20 +6,20 @@ import json
 import pandas as pd
 import os
 
-st.set_page_config(page_title="Registro Provencesa", layout="wide", page_icon="🌾")
+st.set_page_config(page_title="App Calidad Provencesa", layout="wide", page_icon="🌾")
 
 # --- CONFIGURACIÓN IA ---
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    modelos_vision = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-    model = genai.GenerativeModel(modelos_vision[0]) if modelos_vision else None
+    modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+    model = genai.GenerativeModel(modelos[0]) if modelos else None
 except: model = None
 
 # --- LÓGICA COVENIN 1935:2017 ---
-def determinar_clase(d):
-    # Regla: Si hay Aflatoxina (columna 16), es rechazo directo
+def clasificar_covenin(d):
+    # Regla: Si Aflatoxina (item 16) > 0, Rechazo directo
     if d.get("Aflatoxina", 0) > 0: return "Rechazado"
-    # Lógica según tabla para Maíz Acondicionado
+    # Lógica simplificada para Maíz Acondicionado según tabla
     if (d.get("Total Dañados",0) <= 6 and d.get("Impureza",0) <= 2 and d.get("Granos Part.",0) <= 3 and 
         d.get("Dañado Calor",0) <= 1 and d.get("Cristalizados",0) <= 5 and d.get("Peso Vol",0) >= 0.760):
         return "Clase I"
@@ -34,70 +34,54 @@ def determinar_clase(d):
 # --- ESTADO Y ESCÁNER ---
 if 'datos_ia' not in st.session_state: st.session_state.datos_ia = {'cabecera': {}, 'items': {}}
 
-st.title("🌾 Registro de Información - Provencesa")
-
-col1, col2 = st.columns(2)
-analista = col1.text_input("Nombre y Apellido del Analista")
-fecha = col2.date_input("Fecha de Inspección")
+st.title("🌾 Registro de Calidad - Provencesa")
 
 with st.sidebar:
     st.header("📸 Escáner")
     archivo = st.file_uploader("Subir planilla", type=['jpg', 'jpeg', 'png'])
-    if archivo and model and st.button("🤖 PROCESAR PLANILLA"):
-        with st.spinner("IA analizando..."):
+    if archivo and model and st.button("🤖 PROCESAR"):
+        with st.spinner("Analizando..."):
             try:
-                img = Image.open(archivo)
-                prompt = "Extrae los 20 items y cabecera en JSON estricto: {'cabecera': {'placa':'', 'silo':''}, 'items': {'01': 0.0, ...}}"
-                res = model.generate_content([prompt, img])
+                res = model.generate_content(["Extrae los datos en JSON", Image.open(archivo)])
                 st.session_state.datos_ia = json.loads(res.text.replace('```json','').replace('```',''))
                 st.rerun()
-            except Exception as e: st.error(f"Error IA: {e}")
+            except: st.error("Error al procesar")
 
 # --- FORMULARIO ---
 with st.form("registro_maestro"):
     d = st.session_state.datos_ia
-    cabe = d.get('cabecera', {})
     items = d.get('items', {})
-    
-    st.subheader("📋 Cabecera")
-    c1, c2, c3, c4 = st.columns(4)
-    f_placa = c1.text_input("Placa", value=cabe.get('placa', ''))
-    f_procedencia = c2.text_input("Procedencia", value=cabe.get('procedencia', ''))
-    f_silo = c3.text_input("Silo", value=cabe.get('silo', ''))
-    f_doc = c4.text_input("Documento", value=cabe.get('documento', ''))
-
-    st.subheader("🔬 Resultados")
     nombres = ["Humedad", "Impureza", "Germen Dañado", "Dañado Calor", "Dañado Insecto", "Infectados", "Total Dañados", "Partidos Peq.", "Granos Part.", "Total Part.", "Cristalizados", "Mezcla Color", "Peso Vol", "Color", "Olor", "Aflatoxina", "Insectos V.", "Quemados", "Sensorial", "Semillas Obj."]
+    
     respuestas = {}
     cols = st.columns(4)
     for i in range(20):
         with cols[i%4]:
             val = items.get(str(i+1).zfill(2), 0.0)
-            try: valor_seguro = float(val)
-            except: valor_seguro = 0.0
-            respuestas[nombres[i]] = st.number_input(f"{i+1}. {nombres[i]}", value=valor_seguro)
+            respuestas[nombres[i]] = st.number_input(f"{i+1}. {nombres[i]}", value=float(val))
 
-    f_estatus = st.radio("Estatus:", ["Aprobado", "Rechazado"], horizontal=True)
-    f_motivo = st.text_input("Motivo de Rechazo (si aplica)")
-    submit = st.form_submit_button("✅ REGISTRAR Y GUARDAR")
-
-    if submit:
-        clase = determinar_clase(respuestas)
-        registro = {**respuestas, "Analista": analista, "Fecha": str(fecha), "Placa": f_placa, "Estatus": f_estatus, "Clase": clase}
-        
-        # Guardado en Excel
+    # Clasificación automática
+    clase_calculada = clasificar_covenin(respuestas)
+    st.subheader(f"Resultado Automático: {clase_calculada}")
+    
+    # Sincronizar Radio con el resultado
+    estatus_auto = "Aprobado" if clase_calculada != "Rechazado" else "Rechazado"
+    f_estatus = st.radio("Estatus Final:", ["Aprobado", "Rechazado"], index=["Aprobado", "Rechazado"].index(estatus_auto))
+    
+    if st.form_submit_button("✅ REGISTRAR"):
+        registro = {**respuestas, "Fecha": str(datetime.now().date()), "Clase": clase_calculada, "Estatus": f_estatus}
         archivo_exc = "aprobados.xlsx" if f_estatus == 'Aprobado' else "rechazados.xlsx"
+        
         df_nuevo = pd.DataFrame([registro])
         if os.path.exists(archivo_exc):
-            df_new = pd.concat([pd.read_excel(archivo_exc), df_nuevo], ignore_index=True)
-            df_new.to_excel(archivo_exc, index=False)
+            pd.concat([pd.read_excel(archivo_exc), df_nuevo], ignore_index=True).to_excel(archivo_exc, index=False)
         else:
             df_nuevo.to_excel(archivo_exc, index=False)
-        st.success(f"Registrado como: **{clase}**. Datos guardados en {archivo_exc}")
+        st.success(f"Guardado exitosamente como {f_estatus} en {archivo_exc}")
 
-# --- REPORTE ---
-if os.path.exists("aprobados.xlsx"):
-    st.divider()
-    st.subheader("📊 Reporte de Aprobados")
-    df = pd.read_excel("aprobados.xlsx")
-    st.metric("Promedio Humedad", f"{df['Humedad'].mean():.2f}%")
+# --- DESCARGA ---
+st.divider()
+for ar in ["aprobados.xlsx", "rechazados.xlsx"]:
+    if os.path.exists(ar):
+        with open(ar, "rb") as f:
+            st.download_button(f"📥 Descargar {ar}", f, file_name=ar)
