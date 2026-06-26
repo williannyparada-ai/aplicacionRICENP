@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 
 # --- CONFIGURACIÓN ---
-OCR_API_KEY = "TU_CLAVE_AQUI" # <--- PEGA TU CLAVE AQUÍ
+OCR_API_KEY = "K83381284588957" # <--- PEGA TU CLAVE AQUÍ
 
 st.set_page_config(page_title="App Calidad Provencesa", layout="wide")
 
