@@ -1,82 +1,85 @@
 import streamlit as st
-import pandas as pd
-from datetime import datetime
 import google.generativeai as genai
-from PIL import Image
+from PIL import Image, ImageOps
+from fpdf import FPDF
+from datetime import datetime
 import json
+import io
+import pandas as pd
 
+# --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Sistema Provencesa", layout="wide", page_icon="🌾")
 
-# --- 1. CONFIGURACIÓN IA ---
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
     model = genai.GenerativeModel('gemini-1.5-flash')
 except:
-    st.error("Error en API KEY. Configúrala en los Secrets.")
+    st.error("Configura tu GOOGLE_API_KEY en los Secrets.")
 
-# --- 2. ESTADO INICIAL ---
-if 'datos_ia' not in st.session_state:
-    st.session_state.datos_ia = {"Humedad": 0.0, "Total Dañados": 0.0, "Impureza": 0.0, "Total Part.": 0.0}
-if 'aprobados' not in st.session_state: st.session_state.aprobados = pd.DataFrame()
-if 'rechazados' not in st.session_state: st.session_state.rechazados = pd.DataFrame()
+# --- MEMORIA (Privada por sesión) ---
+if 'historico' not in st.session_state: st.session_state.historico = []
+if 'datos_ia' not in st.session_state: st.session_state.datos_ia = {}
 
-# --- 3. UI Y LÓGICA ---
+def procesar_con_ia(img_pil):
+    img_byte_arr = io.BytesIO()
+    img_pil.save(img_byte_arr, format='JPEG')
+    response = model.generate_content(["Extrae datos de esta planilla en JSON.", {"mime_type": "image/jpeg", "data": img_byte_arr.getvalue()}])
+    return json.loads(response.text.replace('```json', '').replace('```', ''))
+
+# --- SIDEBAR: IDENTIFICACIÓN Y ESCÁNER ---
 with st.sidebar:
     st.header("👤 Identificación")
-    nombre_analista = st.text_input("Nombre y Apellido")
-    fecha_hoy = st.date_input("Fecha", datetime.now())
+    nombre_analista = st.text_input("Tu Nombre")
+    archivo = st.file_uploader("Subir foto planilla", type=['jpg', 'jpeg', 'png'])
+    if archivo:
+        img_pil = ImageOps.exif_transpose(Image.open(archivo))
+        st.image(img_pil, use_container_width=True)
+        if st.button("🤖 LEER PLANILLA"):
+            with st.spinner("Procesando..."):
+                try:
+                    st.session_state.datos_ia = procesar_con_ia(img_pil)
+                    st.rerun()
+                except: st.error("Error al leer.")
 
+# --- FORMULARIO ---
+st.title("🌾 Registro de Calidad Provencesa")
 if not nombre_analista:
-    st.warning("Ingresa tu nombre para comenzar.")
+    st.warning("Ingresa tu nombre en el menú lateral.")
     st.stop()
 
-st.title("🌾 Registro de Calidad")
-archivo_foto = st.file_uploader("📸 Foto de planilla", type=['jpg', 'jpeg', 'png'])
-
-if archivo_foto and st.button("🤖 Procesar con IA"):
-    with st.spinner("Analizando..."):
-        try:
-            img = Image.open(archivo_foto)
-            prompt = "Extrae: Humedad, Total Dañados, Impureza, Total Partidos. Responde solo JSON."
-            response = model.generate_content([prompt, img])
-            st.session_state.datos_ia = json.loads(response.text.replace('```json', '').replace('```', ''))
-            st.success("¡Datos extraídos!")
-        except Exception as e:
-            st.error("Error al leer, ingresa manualmente.")
-
-# --- 4. FORMULARIO CORRECTO ---
-with st.form("registro_form"):
-    placa = st.text_input("Placa del Vehículo")
-    h = st.number_input("Humedad (%)", value=float(st.session_state.datos_ia.get("Humedad", 0.0)))
-    d = st.number_input("Total Dañados (%)", value=float(st.session_state.datos_ia.get("Total Dañados", 0.0)))
-    i = st.number_input("Impureza (%)", value=float(st.session_state.datos_ia.get("Impureza", 0.0)))
-    p = st.number_input("Total Partidos (%)", value=float(st.session_state.datos_ia.get("Total Part.", 0.0)))
-    estatus = st.radio("Decisión:", ["Aprobado", "Rechazado"])
-    motivo = st.text_input("Motivo de rechazo")
+items = st.session_state.datos_ia.get('items', {})
+with st.form("registro_maestro"):
+    f_placa = st.text_input("Placa", value=st.session_state.datos_ia.get('cabecera', {}).get('placa', ''))
     
-    # EL BOTÓN DEBE ESTAR DENTRO DEL FORM
-    submit = st.form_submit_button("Registrar Vehículo")
+    c1, c2, c3, c4 = st.columns(4)
+    respuestas = {}
+    nombres = ["Humedad", "Impureza", "Total Dañados", "Total Part."]
+    for i, nombre in enumerate(nombres):
+        respuestas[nombre] = c1.number_input(nombre, value=float(items.get(nombre, 0.0)))
 
-if submit:
-    # Lógica COVENIN (Simplificada)
-    clase = "CLASE I" if d <= 6 and i <= 2 and p <= 3 else ("CLASE II" if d <= 8 and p <= 5 else "CLASE III")
+    f_estatus = st.radio("Decisión:", ["Aprobado", "Rechazado"], horizontal=True)
+    f_motivo = st.text_input("Motivo de rechazo:")
     
-    fila = pd.DataFrame([{"Fecha": str(fecha_hoy), "Analista": nombre_analista, "Placa": placa, 
-                         "Humedad": h, "Total Dañados": d, "Impureza": i, "Clase": clase}])
-    
-    if estatus == "Aprobado":
-        st.session_state.aprobados = pd.concat([st.session_state.aprobados, fila], ignore_index=True)
-    else:
-        fila["Motivo"] = motivo
-        st.session_state.rechazados = pd.concat([st.session_state.rechazados, fila], ignore_index=True)
-    st.success(f"Registrado como {clase}")
+    if st.form_submit_button("✅ REGISTRAR Y DESCARGAR"):
+        # Lógica COVENIN
+        d, i, p = respuestas["Total Dañados"], respuestas["Impureza"], respuestas["Total Part."]
+        clase = "CLASE I" if d <= 6 and i <= 2 and p <= 3 else ("CLASE II" if d <= 8 and p <= 5 else "CLASE III")
+        
+        nuevo = {"Placa": f_placa, "Estatus": f_estatus, "Clase": clase, **respuestas}
+        st.session_state.historico.append(nuevo)
+        
+        # Generar PDF local
+        pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", 'B', 12)
+        pdf.cell(200, 10, f"REPORTE: {clase} | Placa: {f_placa}", ln=True)
+        for k, v in nuevo.items(): pdf.cell(0, 10, f"{k}: {v}", ln=True)
+        st.session_state.pdf_bytes = pdf.output(dest='S').encode('latin-1')
+        st.rerun()
 
-# --- 5. EXPORTACIÓN ---
-c1, c2 = st.columns(2)
-if not st.session_state.aprobados.empty:
-    c1.subheader("✅ Aprobados"); c1.dataframe(st.session_state.aprobados)
-    c1.download_button("Descargar Aprobados", st.session_state.aprobados.to_csv(index=False), "aprobados.csv")
+# --- DESCARGAS ---
+if 'pdf_bytes' in st.session_state:
+    st.download_button("📥 Descargar Mi Reporte PDF", st.session_state.pdf_bytes, "reporte.pdf")
 
-if not st.session_state.rechazados.empty:
-    c2.subheader("❌ Rechazados"); c2.dataframe(st.session_state.rechazados)
-    c2.download_button("Descargar Rechazados", st.session_state.rechazados.to_csv(index=False), "rechazados.csv")
+if st.session_state.historico:
+    df = pd.DataFrame(st.session_state.historico)
+    st.dataframe(df)
+    st.download_button("📥 Descargar Mi Excel del Día", df.to_csv(index=False), "mis_registros.csv")
