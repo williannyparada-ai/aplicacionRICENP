@@ -10,13 +10,16 @@ st.set_page_config(page_title="Sistema Provencesa", layout="wide", page_icon="�
 
 # --- 1. CONFIGURACIÓN IA ---
 try:
-    # Intenta obtener la API KEY de los secrets
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
-    # Usamos la versión 'latest' para mayor compatibilidad
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    
+    # Buscamos un modelo que soporte generateContent automáticamente
+    modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+    # Priorizamos modelos 'flash' o 'pro' disponibles
+    nombre_modelo = next((m for m in modelos if 'gemini-1.5-flash' in m), modelos[0])
+    model = genai.GenerativeModel(nombre_modelo)
 except Exception as e:
-    st.error(f"Error de configuración de IA: {e}")
+    st.error(f"Error crítico al conectar con la IA: {e}")
     st.stop()
 
 # --- 2. LOGUEO (Barra Lateral) ---
@@ -31,9 +34,7 @@ if not nombre_analista:
 
 # --- 3. LÓGICA COVENIN ---
 def clasificar_covenin(d):
-    # Lógica según tabla COVENIN 1935:2017
-    # Clase I: Dañados <= 6, Impurezas <= 2, Partidos <= 3
-    # Clase II: Dañados <= 8, Impurezas <= 2, Partidos <= 5
+    # Lógica según norma COVENIN 1935:2017
     if d["Total Dañados"] <= 6 and d["Impureza"] <= 2 and d["Total Part."] <= 3: 
         return "CLASE I"
     elif d["Total Dañados"] <= 8 and d["Impureza"] <= 2 and d["Total Part."] <= 5: 
@@ -57,13 +58,13 @@ if archivo_foto:
     if st.button("🤖 Procesar con IA"):
         with st.spinner("Analizando con Gemini..."):
             try:
-                prompt = "Extrae de la imagen los siguientes datos y devuelve un JSON: {'Humedad': float, 'Total Dañados': float, 'Impureza': float, 'Total Part.': float}"
+                prompt = "Extrae de la imagen los datos: Humedad, Total Dañados, Impureza, Total Partidos. Devuelve SOLO un formato JSON puro."
                 response = model.generate_content([prompt, img])
                 texto_limpio = response.text.replace('```json', '').replace('```', '')
                 datos_ia = json.loads(texto_limpio)
                 st.success("¡Lectura exitosa!")
             except Exception as e:
-                st.error(f"Error procesando imagen: {e}. Por favor, ingresa los datos manualmente.")
+                st.error(f"Error procesando imagen: {e}. Por favor, rellena los datos manualmente.")
 
 with st.form("registro"):
     placa = st.text_input("Placa del Vehículo")
@@ -77,7 +78,7 @@ with st.form("registro"):
     if st.form_submit_button("Registrar Vehículo"):
         clase = clasificar_covenin({"Total Dañados": d, "Impureza": i, "Total Part.": p})
         nueva_fila = pd.DataFrame([{
-            "Fecha": fecha_hoy, "Analista": nombre_analista, "Placa": placa, 
+            "Fecha": str(fecha_hoy), "Analista": nombre_analista, "Placa": placa, 
             "Humedad": h, "Total Dañados": d, "Impureza": i, "Clase": clase
         }])
         
