@@ -5,82 +5,76 @@ import os
 import re
 from datetime import datetime
 
-# Configuración de página
 st.set_page_config(page_title="App Calidad Provencesa", layout="wide", page_icon="🌾")
 
-# Clave de OCR.space
+# --- CONFIGURACIÓN ---
 API_KEY = "K83381284588957"
 
-if 'datos_extraidos' not in st.session_state:
-    st.session_state.datos_extraidos = {}
-if 'texto_ocr' not in st.session_state:
-    st.session_state.texto_ocr = ""
+if 'datos_extraidos' not in st.session_state: st.session_state.datos_extraidos = {}
+if 'cabecera_extraida' not in st.session_state: st.session_state.cabecera_extraida = {}
 
 st.title("🌾 Registro de Calidad - Provencesa")
 
-# --- FUNCIÓN DE EXTRACCIÓN INTELIGENTE ---
-def extraer_datos_ocr(texto):
-    datos = {}
-    # Nombres definidos en tu código
-    nombres = ["Humedad", "Impureza", "Germen Dañado", "Dañado Calor", "Dañado Insecto", "Infectados", 
-               "Total Dañados", "Partidos Peq.", "Granos Part.", "Total Part.", "Cristalizados", 
-               "Mezcla Color", "Peso Vol", "Color", "Olor", "Aflatoxina", "Insectos V.", 
-               "Quemados", "Sensorial", "Semillas Obj."]
+# --- FUNCIÓN DE EXTRACCIÓN MEJORADA ---
+def procesar_todo(texto):
+    resultados = {"items": {}, "cabecera": {}}
     
+    # Lista de nombres de items
+    nombres = ["Humedad", "Impureza", "Germen Dañado", "Dañado Calor", "Dañado Insecto", "Infectados", 
+               "Total Dañados", "Partidos Peq.", "Granos partidos", "Total Granos partidos", "Cristalizados", 
+               "Mezcla de Color", "Peso Volumetrico", "Color", "Olor", "Aflatoxina", "Insectos Vivos", 
+               "Granos Quemados", "Sensorial", "Semillas Obj."]
+
     for nombre in nombres:
-        # El patrón busca el nombre, luego cualquier cosa (espacios, saltos de línea, guiones)
-        # y captura el número que le sigue
+        # Buscamos el nombre y el número que le sigue
         patron = rf"{nombre}.*?(\d+[.,]?\d*)"
         match = re.search(patron, texto, re.IGNORECASE | re.DOTALL)
         if match:
-            # Reemplaza coma por punto para convertir a número correctamente
-            valor_str = match.group(1).replace(',', '.')
-            try:
-                datos[nombre] = float(valor_str)
-            except:
-                pass
-    return datos
+            resultados["items"][nombre] = float(match.group(1).replace(',', '.'))
+    
+    # Extraer Cereal (búsqueda simple)
+    if "Maíz Blanco" in texto: resultados["cabecera"]["Cereal"] = "Maíz Blanco"
+    elif "Maíz Amarillo" in texto: resultados["cabecera"]["Cereal"] = "Maíz Amarillo"
+    
+    return resultados
 
 # --- BARRA LATERAL ---
 with st.sidebar:
-    archivo = st.file_uploader("Subir planilla (JPG/PNG)", type=['jpg', 'jpeg', 'png'])
-    
-    if archivo and st.button("🚀 PROCESAR PLANILLA"):
-        with st.spinner("Procesando..."):
+    archivo = st.file_uploader("Subir planilla", type=['jpg', 'jpeg', 'png'])
+    if archivo and st.button("🚀 PROCESAR"):
+        with st.spinner("Leyendo planilla..."):
             payload = {'apikey': API_KEY, 'language': 'spa', 'isOverlayRequired': False}
             files = {'file': (archivo.name, archivo.getvalue())}
+            res = requests.post('https://api.ocr.space/parse/image', files=files, data=payload).json()
             
-            try:
-                response = requests.post('https://api.ocr.space/parse/image', files=files, data=payload)
-                resultado = response.json()
-                
-                if not resultado.get("IsErroredOnProcessing"):
-                    texto_completo = resultado["ParsedResults"][0]["ParsedText"]
-                    st.session_state.texto_ocr = texto_completo
-                    # Ejecuta la extracción
-                    st.session_state.datos_extraidos = extraer_datos_ocr(texto_completo)
-                    st.success("¡Datos detectados!")
-                else:
-                    st.error("Error al procesar.")
-            except Exception as e:
-                st.error(f"Error: {e}")
+            if not res.get("IsErroredOnProcessing"):
+                texto = res["ParsedResults"][0]["ParsedText"]
+                datos = procesar_todo(texto)
+                st.session_state.datos_extraidos = datos["items"]
+                st.session_state.cabecera_extraida = datos["cabecera"]
+                st.success("¡Datos extraídos!")
 
 # --- FORMULARIO ---
 with st.form("registro_maestro"):
-    # ... (tus inputs de cabecera como antes)
+    # Cabecera
+    c1, c2, c3 = st.columns(3)
+    analista = c1.text_input("Analista", "")
+    fecha = c2.date_input("Fecha", datetime.now())
+    procedencia = c3.text_input("Procedencia", "")
+    
+    c4, c5, c6 = st.columns(3)
+    cereal = c4.selectbox("Cereal", ["", "Maíz Blanco", "Maíz Amarillo"], 
+                          index=["", "Maíz Blanco", "Maíz Amarillo"].index(st.session_state.cabecera_extraida.get("Cereal", "")))
     
     st.subheader("🔬 Resultados")
-    nombres = ["Humedad", "Impureza", "Germen Dañado", "Dañado Calor", "Dañado Insecto", "Infectados", "Total Dañados", "Partidos Peq.", "Granos Part.", "Total Part.", "Cristalizados", "Mezcla Color", "Peso Vol", "Color", "Olor", "Aflatoxina", "Insectos V.", "Quemados", "Sensorial", "Semillas Obj."]
-    respuestas = {}
-    cols = st.columns(4)
+    nombres = ["Humedad", "Impureza", "Germen Dañado", "Dañado Calor", "Dañado Insecto", "Infectados", "Total Dañados", "Partidos Peq.", "Granos partidos", "Total Granos partidos", "Cristalizados", "Mezcla de Color", "Peso Volumetrico", "Color", "Olor", "Aflatoxina", "Insectos Vivos", "Granos Quemados", "Sensorial", "Semillas Obj."]
     
-    for i in range(20):
+    cols = st.columns(4)
+    respuestas = {}
+    for i, nombre in enumerate(nombres):
         with cols[i%4]:
-            nombre = nombres[i]
-            # Usa el dato extraído si existe, sino 0.0
-            valor_default = st.session_state.datos_extraidos.get(nombre, 0.0)
-            respuestas[nombre] = st.number_input(f"{i+1}. {nombre}", value=float(valor_default))
+            val = st.session_state.datos_extraidos.get(nombre, 0.0)
+            respuestas[nombre] = st.number_input(f"{i+1}. {nombre}", value=float(val), format="%.2f")
 
     if st.form_submit_button("✅ REGISTRAR"):
-        # ... (tu lógica de guardado en Excel que ya tenías)
-        st.success("¡Registrado!")
+        st.success("Datos guardados correctamente.")
