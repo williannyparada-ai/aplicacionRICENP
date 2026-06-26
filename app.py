@@ -9,15 +9,14 @@ import pandas as pd
 st.set_page_config(page_title="Registro Provencesa", layout="wide", page_icon="🌾")
 
 # --- 1. CONFIGURACIÓN IA ---
-# Nota: Asegúrate que en Secrets solo diga: GOOGLE_API_KEY = "tu_clave_aqui"
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    # Usamos 'gemini-pro' para mayor estabilidad ante errores 404
-    model = genai.GenerativeModel('gemini-pro')
+    # Usamos 'gemini-1.5-flash' que es el estándar actual más compatible
+    model = genai.GenerativeModel('gemini-1.5-flash')
 except Exception as e:
-    st.error(f"Error de configuración IA: {e}")
+    st.error(f"Error de configuración: {e}")
 
-# --- 2. MEMORIA Y LISTA DE ITEMS ---
+# --- 2. VARIABLES DE SESIÓN ---
 if 'historico' not in st.session_state: st.session_state.historico = []
 if 'datos_ia' not in st.session_state: st.session_state.datos_ia = {}
 
@@ -32,39 +31,35 @@ ITEMS_CALIDAD = [
 def procesar_planilla(img_pil):
     img_byte_arr = io.BytesIO()
     img_pil.save(img_byte_arr, format='JPEG')
-    prompt = "Extrae los 21 valores de la planilla. Devuelve solo JSON: {'items': {'01': 'valor', ..., '21': 'valor'}}"
+    prompt = "Extrae los 21 valores de la planilla. Devuelve JSON: {'items': {'01': 'valor', ..., '21': 'valor'}}"
     response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": img_byte_arr.getvalue()}])
     return json.loads(response.text.replace('```json', '').replace('```', '').strip())
 
-# --- 3. SIDEBAR ---
+# --- 3. UI ---
 with st.sidebar:
     st.header("👤 Identificación")
     nombre_analista = st.text_input("Nombre y Apellido")
     fecha_hoy = st.date_input("Fecha", datetime.now())
-    st.divider()
-    archivo = st.file_uploader("Subir foto planilla", type=['jpg', 'jpeg', 'png'])
+    archivo = st.file_uploader("Subir foto", type=['jpg', 'jpeg', 'png'])
     if archivo:
         img_pil = ImageOps.exif_transpose(Image.open(archivo))
-        st.image(img_pil, use_container_width=True)
         if st.button("🤖 LEER LOS 21 ÍTEMS"):
             with st.spinner("Analizando..."):
                 try:
-                    resultado = procesar_planilla(img_pil)
-                    st.session_state.datos_ia = resultado.get("items", {})
+                    res = procesar_planilla(img_pil)
+                    st.session_state.datos_ia = res.get("items", {})
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Error: {e}")
+                    st.error(f"Error IA: {e}")
 
-# --- 4. FORMULARIO PRINCIPAL ---
 st.title("🌾 Registro de Calidad Provencesa")
 if not nombre_analista:
-    st.warning("Ingresa tu nombre en la barra lateral.")
+    st.warning("Ingresa tu nombre.")
     st.stop()
 
+# --- 4. FORMULARIO CON BOTÓN INTEGRADO ---
 datos = st.session_state.datos_ia
 with st.form("registro_maestro"):
-    st.subheader(f"Resultados para: {nombre_analista}")
-    
     cols = st.columns(3)
     respuestas = {}
     for i, nombre in enumerate(ITEMS_CALIDAD):
@@ -72,22 +67,13 @@ with st.form("registro_maestro"):
         val = datos.get(idx, "0.0")
         with cols[i % 3]:
             respuestas[nombre] = st.text_input(nombre, value=str(val))
-
-    st.divider()
-    f_estatus = st.radio("Decisión:", ["Aprobado", "Rechazado"], horizontal=True)
-    f_motivo = st.text_input("Motivo de rechazo:")
     
-    # BOTÓN DE ENVÍO OBLIGATORIO
+    f_estatus = st.radio("Decisión:", ["Aprobado", "Rechazado"], horizontal=True)
+    # EL BOTÓN DEBE ESTAR DENTRO DEL FORM
     submitted = st.form_submit_button("✅ REGISTRAR VEHÍCULO")
 
 if submitted:
     nuevo = {"Fecha": str(fecha_hoy), "Analista": nombre_analista, **respuestas, "Estatus": f_estatus}
     st.session_state.historico.append(nuevo)
-    st.success("¡Registrado!")
+    st.success("Registrado.")
     st.rerun()
-
-# --- 5. HISTORIAL ---
-if st.session_state.historico:
-    df = pd.DataFrame(st.session_state.historico)
-    st.dataframe(df, use_container_width=True)
-    st.download_button("📥 Descargar CSV", df.to_csv(index=False), "historial.csv")
