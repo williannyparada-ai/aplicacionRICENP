@@ -12,7 +12,7 @@ st.set_page_config(page_title="Registro Provencesa", layout="wide", page_icon="ð
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
     # Cambiamos a 'gemini-1.5-flash' sin sufijos para mayor compatibilidad
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-pro')
 except Exception as e:
     st.error(f"Error de configuraciÃ³n IA: {e}")
 
