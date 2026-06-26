@@ -11,7 +11,6 @@ st.set_page_config(page_title="App Calidad Provencesa", layout="wide", page_icon
 # --- 1. CONFIGURACIÓN IA ---
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    # Detecta modelos disponibles para evitar error 404
     modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
     model = genai.GenerativeModel(modelos[0]) if modelos else None
 except: model = None
@@ -22,46 +21,48 @@ if 'datos_ia' not in st.session_state:
 
 st.title("🌾 Registro de Calidad - Provencesa")
 
-# --- 3. ESCÁNER (BARRA LATERAL) ---
+# --- 3. ESCÁNER Y LIMPIEZA (BARRA LATERAL) ---
 with st.sidebar:
     archivo = st.file_uploader("Subir planilla", type=['jpg', 'jpeg', 'png'])
+    
     if archivo and model and st.button("🤖 PROCESAR PLANILLA"):
         with st.spinner("Extrayendo datos..."):
             try:
-                # Prompt estricto para extraer solo los valores numéricos
                 prompt = 'Extrae los 20 datos en JSON plano. Estructura: {"cabecera": {"Procedencia":"", "Destino":"", "Contrato":"", "Documento":"", "Placa":"", "Silo":""}, "items": {"01": 0.0, ...}}'
                 res = model.generate_content([prompt, Image.open(archivo)])
                 texto = res.text.replace('```json', '').replace('```', '').strip()
                 st.session_state.datos_ia = json.loads(texto)
-                st.success("¡Datos cargados!")
+                st.rerun()
             except Exception as e:
-                st.error(f"Error al procesar la IA: {e}")
+                st.error(f"Error IA: {e}")
+                
+    st.divider()
+    # NUEVO BOTÓN PARA REINICIAR
+    if st.button("🧹 LIMPIAR REGISTRO ACTUAL"):
+        st.session_state.datos_ia = {'cabecera': {}, 'items': {}}
+        st.rerun()
 
 # --- 4. FORMULARIO PRINCIPAL ---
 with st.form("registro_maestro"):
     cab = st.session_state.datos_ia.get('cabecera', {})
     items = st.session_state.datos_ia.get('items', {})
     
-    # Datos Administrativos
     c1, c2, c3 = st.columns(3)
     analista = c1.text_input("Analista", "")
     fecha = c2.date_input("Fecha", datetime.now())
     procedencia = c3.text_input("Procedencia", cab.get("Procedencia", ""))
     
-    # Selectores Específicos
     c4, c5, c6 = st.columns(3)
     cereal = c4.selectbox("Cereal", ["", "Maíz Blanco", "Maíz Amarillo"], index=0)
     origen = c5.radio("Origen", ["Nacional", "Importado"], horizontal=True)
     destino = c6.text_input("Destino", cab.get("Destino", ""))
     
-    # Otros datos
     c7, c8, c9, c10 = st.columns(4)
     contrato = c7.text_input("N Contrato", cab.get("Contrato", ""))
     documento = c8.text_input("Documento", cab.get("Documento", ""))
     placa = c9.text_input("Placa", cab.get("Placa", ""))
     silo = c10.text_input("Silo", cab.get("Silo", ""))
 
-    # Resultados Numéricos
     st.subheader("🔬 Resultados")
     nombres = ["Humedad", "Impureza", "Germen Dañado", "Dañado Calor", "Dañado Insecto", "Infectados", "Total Dañados", "Partidos Peq.", "Granos Part.", "Total Part.", "Cristalizados", "Mezcla Color", "Peso Vol", "Color", "Olor", "Aflatoxina", "Insectos V.", "Quemados", "Sensorial", "Semillas Obj."]
     respuestas = {}
@@ -75,7 +76,6 @@ with st.form("registro_maestro"):
 
     estatus = st.radio("Estatus Final:", ["Aprobado", "Rechazado"], horizontal=True)
     
-    # ORDEN DE COLUMNAS PARA EXCEL (IDÉNTICO A TU SEGUNDA IMAGEN)
     orden_cols = ["Fecha", "Analista", "Estatus", "Procedencia", "Destino", "Cereal", "Origen", "Silo", "Contrato", "Placa", "Documento"] + nombres
     
     if st.form_submit_button("✅ REGISTRAR Y GUARDAR"):
@@ -90,10 +90,10 @@ with st.form("registro_maestro"):
         
         if os.path.exists(archivo_exc):
             df_existente = pd.read_excel(archivo_exc)
-            pd.concat([df_existente, df_nuevo], ignore_index=True).to_excel(archivo_exc, index=False)
+            pd.concat([df_existente, df_nuevo], ignore_index=True)[orden_cols].to_excel(archivo_exc, index=False)
         else:
             df_nuevo.to_excel(archivo_exc, index=False)
-        st.success(f"Guardado exitosamente en {archivo_exc}")
+        st.success(f"Guardado en {archivo_exc}. ¡Ya puedes limpiar el registro si deseas!")
 
 # --- 5. DESCARGAS ---
 st.divider()
