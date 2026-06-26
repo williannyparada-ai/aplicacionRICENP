@@ -1,84 +1,60 @@
 import streamlit as st
 import google.generativeai as genai
 from PIL import Image
-from fpdf import FPDF
 from datetime import datetime
 import json
-import io
 import pandas as pd
 import os
 
-# --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Registro Provencesa", layout="wide", page_icon="🌾")
 
-# --- CONFIGURACIÓN DE IA ---
+# --- CONFIGURACIÓN IA ---
 try:
-    api_key = st.secrets["GOOGLE_API_KEY"]
-    genai.configure(api_key=api_key)
-    # Detección automática de modelo para evitar error NotFound
-    modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-    nombre_modelo = next((m for m in modelos if 'gemini-1.5-flash' in m), modelos[0])
-    model = genai.GenerativeModel(nombre_modelo)
-except Exception as e:
-    st.error(f"Error de configuración de IA: {e}")
+    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+    model = genai.GenerativeModel('gemini-1.5-flash')
+except:
+    st.error("Configura la API KEY en los secretos")
     model = None
 
-# --- LÓGICA COVENIN 1935:2017 ---
+# --- LÓGICA COVENIN ---
 def determinar_clase(d):
-    # Regla: Si es Aflatoxina, es rechazo
     if d.get("Aflatoxina", 0) > 0: return "Rechazado"
-    
-    # Evaluación por rangos (Maíz Acondicionado)
-    if (d["Total Dañados"] <= 6 and d["Impureza"] <= 2 and d["Granos Part."] <= 3 and 
-        d["Dañado Calor"] <= 1 and d["Cristalizados"] <= 5 and d["Peso Vol"] >= 0.760):
+    if (d.get("Total Dañados",0) <= 6 and d.get("Impureza",0) <= 2 and d.get("Granos Part.",0) <= 3 and 
+        d.get("Dañado Calor",0) <= 1 and d.get("Cristalizados",0) <= 5 and d.get("Peso Vol",0) >= 0.760):
         return "Clase I"
-    elif (d["Total Dañados"] <= 8 and d["Impureza"] <= 2 and d["Granos Part."] <= 5 and 
-          d["Dañado Calor"] <= 2 and d["Cristalizados"] <= 10 and d["Peso Vol"] >= 0.745):
-        return "Clase II"
-    elif (d["Total Dañados"] <= 11 and d["Impureza"] <= 2 and d["Granos Part."] <= 7 and 
-          d["Dañado Calor"] <= 3 and d["Cristalizados"] <= 15 and d["Peso Vol"] >= 0.730):
-        return "Clase III"
-    return "Rechazado"
-
-# --- GESTIÓN DE DATOS ---
-def guardar_en_excel(datos):
-    archivo = "aprobados.xlsx" if datos['Estatus'] == 'Aprobado' else "rechazados.xlsx"
-    df_nuevo = pd.DataFrame([datos])
-    if os.path.exists(archivo):
-        df = pd.read_excel(archivo)
-        df = pd.concat([df, df_nuevo], ignore_index=True)
-    else:
-        df = df_nuevo
-    df.to_excel(archivo, index=False)
+    return "Clase II o III"
 
 # --- ESTADO ---
-if 'datos_ia' not in st.session_state: st.session_state.datos_ia = {}
+if 'datos_ia' not in st.session_state: st.session_state.datos_ia = {'cabecera': {}, 'items': {}}
 
 st.title("🌾 Registro de Información - Provencesa")
 
 # 1. ENTRADA DE DATOS
-c1, c2 = st.columns(2)
-analista = c1.text_input("Nombre y Apellido del Analista")
-fecha = c2.date_input("Fecha de Inspección")
+col1, col2 = st.columns(2)
+analista = col1.text_input("Nombre y Apellido del Analista")
+fecha = col2.date_input("Fecha de Inspección")
 
-# 2. ESCÁNER (SIDEBAR)
+# 2. ESCÁNER
 with st.sidebar:
     st.header("📸 Escáner")
     archivo = st.file_uploader("Subir planilla", type=['jpg', 'jpeg', 'png'])
     if archivo and model and st.button("🤖 PROCESAR PLANILLA"):
-        img = Image.open(archivo)
         with st.spinner("IA trabajando..."):
-            prompt = "Extrae los 20 items de la tabla y la cabecera. Devuelve SOLO JSON."
+            img = Image.open(archivo)
+            prompt = "Extrae los 20 items de la tabla y la cabecera. Devuelve SOLO JSON con estructura: {'cabecera': {...}, 'items': {'01': val, ...}}"
             response = model.generate_content([prompt, img])
-            st.session_state.datos_ia = json.loads(response.text.replace('```json','').replace('```',''))
-            st.success("¡Datos cargados!")
+            try:
+                st.session_state.datos_ia = json.loads(response.text.replace('```json','').replace('```',''))
+                st.success("¡Datos cargados!")
+                st.rerun()
+            except: st.error("Error al procesar la IA")
 
-# 3. FORMULARIO
-d = st.session_state.datos_ia
-cabe = d.get('cabecera', {})
-items = d.get('items', {})
-
+# 3. FORMULARIO MAESTRO
 with st.form("registro_maestro"):
+    d = st.session_state.datos_ia
+    cabe = d.get('cabecera', {})
+    items = d.get('items', {})
+
     c1, c2, c3, c4 = st.columns(4)
     f_placa = c1.text_input("Placa", value=cabe.get('placa', ''))
     f_procedencia = c2.text_input("Procedencia", value=cabe.get('procedencia', ''))
@@ -95,24 +71,29 @@ with st.form("registro_maestro"):
     cols = st.columns(4)
     for i in range(20):
         with cols[i%4]:
-            val = items.get(str(i+1).zfill(2), 0.0)
+            key = str(i+1).zfill(2)
+            val = items.get(key, 0.0)
             respuestas[nombres[i]] = st.number_input(f"{nombres[i]}", value=float(val))
 
     f_estatus = st.radio("Estatus:", ["Aprobado", "Rechazado"], horizontal=True)
     f_motivo = st.text_input("Motivo de Rechazo (si aplica)")
+    
+    # EL BOTÓN DE ENVÍO DEBE ESTAR DENTRO DEL BLOQUE "with st.form"
+    submit = st.form_submit_button("✅ REGISTRAR Y GUARDAR")
 
-    if st.form_submit_button("✅ REGISTRAR"):
+    if submit:
         clase = determinar_clase(respuestas)
         registro = {**respuestas, "Analista": analista, "Fecha": str(fecha), "Placa": f_placa, 
                     "Estatus": f_estatus, "Motivo": f_motivo, "Clase": clase}
         
-        guardar_en_excel(registro)
-        st.success(f"Registrado. Clasificación COVENIN: **{clase}**")
-
-# 4. REPORTE
-if os.path.exists("aprobados.xlsx"):
-    st.divider()
-    st.subheader("📊 Resumen Diario")
-    df_ap = pd.read_excel("aprobados.xlsx")
-    st.metric("Promedio Humedad Aprobados", f"{df_ap['Humedad'].mean():.2f}%")
-    st.dataframe(df_ap)
+        # Guardado en Excel
+        archivo_exc = "aprobados.xlsx" if f_estatus == 'Aprobado' else "rechazados.xlsx"
+        df_nuevo = pd.DataFrame([registro])
+        if os.path.exists(archivo_exc):
+            df_old = pd.read_excel(archivo_exc)
+            df_new = pd.concat([df_old, df_nuevo], ignore_index=True)
+            df_new.to_excel(archivo_exc, index=False)
+        else:
+            df_nuevo.to_excel(archivo_exc, index=False)
+            
+        st.success(f"Registrado como: **{clase}**")
