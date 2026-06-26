@@ -8,13 +8,27 @@ import os
 
 st.set_page_config(page_title="Registro Provencesa", layout="wide", page_icon="🌾")
 
-# --- CONFIGURACIÓN IA ---
+# --- CONFIGURACIÓN DE IA (SOLUCIÓN ROBUSTA) ---
 try:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+    api_key = st.secrets["GOOGLE_API_KEY"]
+    genai.configure(api_key=api_key)
+    
+    # Intentamos conectar con el modelo estándar
     model = genai.GenerativeModel('gemini-1.5-flash')
-except:
-    st.error("Configura la API KEY en los secretos")
-    model = None
+    
+    # Prueba de conexión rápida
+    # Si esta línea falla, el bloque 'except' la atrapará
+    model.generate_content("Hola") 
+    
+except Exception as e:
+    st.error(f"Error de conexión con Gemini: {e}")
+    st.warning("Intentando cambiar a 'gemini-1.0-pro'...")
+    try:
+        # Fallback al modelo anterior si el 1.5 falla
+        model = genai.GenerativeModel('gemini-1.0-pro')
+    except Exception as e2:
+        st.error(f"Error crítico: No se pudo conectar a ningún modelo. Verifica tu API Key. Detalles: {e2}")
+        model = None
 
 # --- LÓGICA COVENIN ---
 def determinar_clase(d):
