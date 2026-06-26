@@ -5,51 +5,53 @@ from datetime import datetime
 import json
 import pandas as pd
 import os
+import time
 
 st.set_page_config(page_title="App Calidad Provencesa", layout="wide", page_icon="🌾")
 
-# --- 1. CONFIGURACIÓN IA ---
+# --- 1. CONFIGURACIÓN ---
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-    model = genai.GenerativeModel(modelos[0]) if modelos else None
+    model = genai.GenerativeModel('gemini-1.5-flash') # Modelo optimizado para velocidad
 except: model = None
 
-# --- 2. ESTADO INICIAL ---
 if 'datos_ia' not in st.session_state: 
     st.session_state.datos_ia = {'cabecera': {}, 'items': {}}
 
 st.title("🌾 Registro de Calidad - Provencesa")
 
-# --- 3. ESCÁNER Y LIMPIEZA (BARRA LATERAL) ---
+# --- 2. BARRA LATERAL (PROCESAR Y LIMPIAR) ---
 with st.sidebar:
+    st.write("Modelo: gemini-1.5-flash")
     archivo = st.file_uploader("Subir planilla", type=['jpg', 'jpeg', 'png'])
     
     if archivo and model and st.button("🤖 PROCESAR PLANILLA"):
-        with st.spinner("Extrayendo datos..."):
-            try:
-                prompt = 'Extrae los 20 datos en JSON plano. Estructura: {"cabecera": {"Procedencia":"", "Destino":"", "Contrato":"", "Documento":"", "Placa":"", "Silo":""}, "items": {"01": 0.0, ...}}'
-                res = model.generate_content([prompt, Image.open(archivo)])
-                texto = res.text.replace('```json', '').replace('```', '').strip()
-                st.session_state.datos_ia = json.loads(texto)
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error IA: {e}")
-                
+        with st.spinner("Procesando con reintento automático..."):
+            prompt = 'Extrae los 20 datos en JSON plano. Estructura: {"cabecera": {"Procedencia":"", "Destino":"", "Contrato":"", "Documento":"", "Placa":"", "Silo":""}, "items": {"01": 0.0, ...}}'
+            
+            # Lógica de Reintento (hasta 3 veces si hay error de cuota)
+            for intento in range(3):
+                try:
+                    res = model.generate_content([prompt, Image.open(archivo)])
+                    texto = res.text.replace('```json', '').replace('```', '').strip()
+                    st.session_state.datos_ia = json.loads(texto)
+                    st.rerun()
+                    break 
+                except Exception as e:
+                    if "429" in str(e) and intento < 2:
+                        time.sleep(10) # Espera 10 segundos y reintenta
+                    else:
+                        st.error(f"Error tras reintentos: {e}")
+                        break
+
     st.divider()
-    
-    # --- BOTÓN DE LIMPIEZA TOTAL ---
     if st.button("🧹 BORRAR TODO Y EMPEZAR DE CERO"):
-        # 1. Limpiar memoria
         st.session_state.datos_ia = {'cabecera': {}, 'items': {}}
-        # 2. Eliminar los archivos físicos si existen
-        for archivo_borrar in ["aprobados.xlsx", "rechazados.xlsx"]:
-            if os.path.exists(archivo_borrar):
-                os.remove(archivo_borrar)
-        st.success("¡Registros eliminados y memoria limpia!")
+        for ar in ["aprobados.xlsx", "rechazados.xlsx"]:
+            if os.path.exists(ar): os.remove(ar)
         st.rerun()
 
-# --- 4. FORMULARIO PRINCIPAL ---
+# --- 3. FORMULARIO ---
 with st.form("registro_maestro"):
     cab = st.session_state.datos_ia.get('cabecera', {})
     items = st.session_state.datos_ia.get('items', {})
@@ -102,7 +104,7 @@ with st.form("registro_maestro"):
             df_nuevo.to_excel(archivo_exc, index=False)
         st.success(f"Guardado en {archivo_exc}")
 
-# --- 5. DESCARGAS ---
+# --- 4. DESCARGAS ---
 st.divider()
 for ar in ["aprobados.xlsx", "rechazados.xlsx"]:
     if os.path.exists(ar):
