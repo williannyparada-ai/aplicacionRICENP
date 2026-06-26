@@ -8,43 +8,35 @@ import os
 
 st.set_page_config(page_title="App Calidad Provencesa", layout="wide", page_icon="🌾")
 
-# --- 1. CONFIGURACIÓN IA ROBUSTA ---
+# --- CONFIGURACIÓN IA ---
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    # Auto-selección de modelo para evitar el error 404
     modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-    if modelos:
-        model = genai.GenerativeModel(modelos[0])
-        st.sidebar.success(f"Modelo: {modelos[0]}")
-    else:
-        st.error("No se encontraron modelos disponibles.")
-        model = None
-except Exception as e:
-    st.error(f"Error de conexión: {e}")
-    model = None
+    model = genai.GenerativeModel(modelos[0]) if modelos else None
+except: model = None
 
-# --- 2. ESTADO ---
+# --- ESTADO ---
 if 'datos_ia' not in st.session_state: 
     st.session_state.datos_ia = {'cabecera': {}, 'items': {}}
 
 st.title("🌾 Registro de Calidad - Provencesa")
 
-# --- 3. ESCÁNER ---
+# --- ESCÁNER ---
 with st.sidebar:
     archivo = st.file_uploader("Subir planilla", type=['jpg', 'jpeg', 'png'])
     if archivo and model and st.button("🤖 PROCESAR PLANILLA"):
         with st.spinner("Analizando..."):
             try:
-                # Prompt estricto para evitar errores JSON
-                prompt = 'Extrae los datos en JSON plano. Estructura: {"cabecera": {"Procedencia":"", "Destino":"", "Contrato":"", "Cereal":"", "Documento":"", "Placa":"", "Silo":""}, "items": {"01": 0.0, ...}}'
+                # Prompt ajustado para ignorar Cereal/Origen y enfocarse en datos numéricos
+                prompt = 'Extrae los datos en JSON. Ignora Cereal y Origen. Estructura: {"cabecera": {"Procedencia":"", "Destino":"", "Contrato":"", "Documento":"", "Placa":"", "Silo":""}, "items": {"01": 0.0, ...}}'
                 res = model.generate_content([prompt, Image.open(archivo)])
                 texto = res.text.replace('```json', '').replace('```', '').strip()
                 st.session_state.datos_ia = json.loads(texto)
                 st.rerun()
             except Exception as e:
-                st.error(f"Error procesando imagen: {e}")
+                st.error(f"Error procesando: {e}")
 
-# --- 4. FORMULARIO (CORREGIDO) ---
+# --- FORMULARIO ---
 with st.form("registro_maestro"):
     cab = st.session_state.datos_ia.get('cabecera', {})
     items = st.session_state.datos_ia.get('items', {})
@@ -55,15 +47,17 @@ with st.form("registro_maestro"):
     fecha = c2.date_input("Fecha", datetime.now())
     procedencia = c3.text_input("Procedencia", cab.get("Procedencia", ""))
     
-    c4, c5, c6, c7 = st.columns(4)
-    destino = c4.text_input("Destino", cab.get("Destino", ""))
-    contrato = c5.text_input("N Contrato", cab.get("Contrato", ""))
-    cereal = c6.text_input("Cereal", cab.get("Cereal", ""))
-    documento = c7.text_input("Documento", cab.get("Documento", ""))
+    # Nuevos desplegables
+    c4, c5, c6 = st.columns(3)
+    cereal = c4.selectbox("Cereal", ["", "Maíz Blanco", "Maíz Amarillo"], index=0)
+    origen = c5.radio("Origen", ["Nacional", "Importado"], horizontal=True)
+    destino = c6.text_input("Destino", cab.get("Destino", ""))
     
-    c8, c9 = st.columns(2)
-    placa = c8.text_input("Placa", cab.get("Placa", ""))
-    silo = c9.text_input("Silo", cab.get("Silo", ""))
+    c7, c8, c9, c10 = st.columns(4)
+    contrato = c7.text_input("N Contrato", cab.get("Contrato", ""))
+    documento = c8.text_input("Documento", cab.get("Documento", ""))
+    placa = c9.text_input("Placa", cab.get("Placa", ""))
+    silo = c10.text_input("Silo", cab.get("Silo", ""))
 
     # Resultados
     st.subheader("🔬 Resultados")
@@ -77,16 +71,14 @@ with st.form("registro_maestro"):
             except: v_f = 0.0
             respuestas[nombres[i]] = st.number_input(f"{i+1}. {nombres[i]}", value=v_f)
 
-    estatus = st.radio("Estatus:", ["Aprobado", "Rechazado"], horizontal=True)
+    estatus = st.radio("Estatus Final:", ["Aprobado", "Rechazado"], horizontal=True)
     
-    # BOTÓN DE ENVÍO (OBLIGATORIO DENTRO DEL FORM)
-    submit = st.form_submit_button("✅ REGISTRAR Y GUARDAR")
-
-    if submit:
+    # BOTÓN OBLIGATORIO
+    if st.form_submit_button("✅ REGISTRAR Y GUARDAR"):
         registro = {
-            "Fecha": str(fecha), "Analista": analista, "Procedencia": procedencia, "Destino": destino,
-            "Contrato": contrato, "Cereal": cereal, "Documento": documento, "Placa": placa, "Silo": silo,
-            **respuestas, "Estatus": estatus
+            "Fecha": str(fecha), "Analista": analista, "Procedencia": procedencia, "Cereal": cereal,
+            "Origen": origen, "Destino": destino, "Contrato": contrato, "Documento": documento, 
+            "Placa": placa, "Silo": silo, **respuestas, "Estatus": estatus
         }
         
         archivo_exc = "aprobados.xlsx" if estatus == "Aprobado" else "rechazados.xlsx"
@@ -96,9 +88,9 @@ with st.form("registro_maestro"):
             pd.concat([pd.read_excel(archivo_exc), df_nuevo], ignore_index=True).to_excel(archivo_exc, index=False)
         else:
             df_nuevo.to_excel(archivo_exc, index=False)
-        st.success(f"Registrado correctamente como {estatus}")
+        st.success(f"Guardado exitosamente como {estatus}")
 
-# --- 5. DESCARGAS ---
+# --- DESCARGAS ---
 st.divider()
 for ar in ["aprobados.xlsx", "rechazados.xlsx"]:
     if os.path.exists(ar):
