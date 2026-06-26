@@ -1,69 +1,75 @@
 import streamlit as st
 import google.generativeai as genai
 from PIL import Image
-from datetime import datetime
-import json
 import pandas as pd
 import os
+from datetime import datetime
 
-st.set_page_config(page_title="Registro Provencesa", layout="wide", page_icon="🌾")
+# Configuración inicial
+st.set_page_config(page_title="App Provencesa", layout="wide")
 
-# --- CONFIGURACIÓN IA ---
+# Configuración IA
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    modelos_vision = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-    model = genai.GenerativeModel(modelos_vision[0]) if modelos_vision else None
+    model = genai.GenerativeModel('gemini-1.5-flash')
 except: model = None
 
-# --- ESTADO ---
-if 'datos_ia' not in st.session_state: st.session_state.datos_ia = {'cabecera': {}, 'items': {}}
+# --- LÓGICA COVENIN 1935:2017 ---
+def clasificar_maiz(datos):
+    # Nota: Asumimos 'Maíz Acondicionado' basado en la tabla
+    if datos["Total Dañados"] <= 6 and datos["Impureza"] <= 2 and datos["Granos Part."] <= 3 and datos["Peso Vol"] >= 0.760:
+        return "Clase I"
+    elif datos["Total Dañados"] <= 8 and datos["Impureza"] <= 2 and datos["Granos Part."] <= 5 and datos["Peso Vol"] >= 0.745:
+        return "Clase II"
+    elif datos["Total Dañados"] <= 11 and datos["Impureza"] <= 2 and datos["Granos Part."] <= 7 and datos["Peso Vol"] >= 0.730:
+        return "Clase III"
+    else:
+        return "Rechazado"
 
-st.title("🌾 Registro de Información - Provencesa")
+# --- INTERFAZ ---
+st.title("🌾 Registro de Calidad Provencesa")
 
-# 1. ENTRADA
+# Registro del Analista
 col1, col2 = st.columns(2)
-analista = col1.text_input("Nombre y Apellido del Analista")
-fecha = col2.date_input("Fecha de Inspección")
+analista = col1.text_input("Nombre del Analista")
+fecha = col2.date_input("Fecha", datetime.now())
 
-# 2. ESCÁNER
-with st.sidebar:
-    archivo = st.file_uploader("Subir planilla", type=['jpg', 'jpeg', 'png'])
-    if archivo and model and st.button("🤖 PROCESAR PLANILLA"):
-        with st.spinner("IA analizando..."):
-            try:
-                img = Image.open(archivo)
-                prompt = "Extrae los datos en formato JSON estricto: {'cabecera': {'placa':'', 'silo':'', ...}, 'items': {'01': 0.0, '02': 0.0, ...}}"
-                res = model.generate_content([prompt, img])
-                st.session_state.datos_ia = json.loads(res.text.replace('```json','').replace('```',''))
-                st.rerun()
-            except Exception as e: st.error(f"Error: {e}")
-
-# 3. FORMULARIO SEGURO
-with st.form("registro_maestro"):
-    d = st.session_state.datos_ia
-    items = d.get('items', {})
+# Formulario
+with st.form("registro"):
+    # ... (Tus campos de placa, silo, etc.) ...
     
-    st.subheader("🔬 Resultados")
-    nombres = ["Humedad", "Impureza", "Germen Dañado", "Dañado Calor", "Dañado Insecto", 
-               "Infectados", "Total Dañados", "Partidos Peq.", "Granos Part.", "Total Part.",
-               "Cristalizados", "Mezcla Color", "Peso Vol", "Color", "Olor", "Aflatoxina",
-               "Insectos V.", "Quemados", "Sensorial", "Semillas Obj."]
+    # Ejemplo de cómo capturar campos para la tabla
+    humedad = st.number_input("Humedad (%)", min_value=0.0, max_value=30.0)
+    impureza = st.number_input("Impurezas (%)", min_value=0.0, max_value=10.0)
+    total_danados = st.number_input("Total Dañados (%)")
+    granos_part = st.number_input("Granos Partidos (%)")
+    peso_vol = st.number_input("Peso Volumétrico (kg/L)")
     
-    respuestas = {}
-    cols = st.columns(4)
-    for i in range(20):
-        with cols[i%4]:
-            val = items.get(str(i+1).zfill(2), 0.0)
-            # Limpieza segura de datos para evitar ValueError
-            try:
-                valor_seguro = float(val)
-            except:
-                valor_seguro = 0.0
-            respuestas[nombres[i]] = st.number_input(f"{i+1}. {nombres[i]}", value=valor_seguro)
+    estatus = st.radio("Estatus", ["Aprobado", "Rechazado"])
+    motivo_rechazo = st.text_input("Motivo de Rechazo (si aplica)")
+    
+    submitted = st.form_submit_button("REGISTRAR")
 
-    # BOTÓN OBLIGATORIO DENTRO DEL FORM
-    submit = st.form_submit_button("✅ REGISTRAR Y GUARDAR")
+    if submitted:
+        datos_analisis = {
+            "Total Dañados": total_danados, "Impureza": impureza, 
+            "Granos Part.": granos_part, "Peso Vol": peso_vol
+        }
+        clase = clasificar_maiz(datos_analisis)
+        
+        # Guardar en Excel
+        archivo = "aprobados.xlsx" if estatus == "Aprobado" else "rechazados.xlsx"
+        df_nuevo = pd.DataFrame([{**datos_analisis, "Clase": clase, "Analista": analista, "Fecha": fecha}])
+        
+        if os.path.exists(archivo):
+            df_existente = pd.read_excel(archivo)
+            df_nuevo = pd.concat([df_existente, df_nuevo], ignore_index=True)
+        
+        df_nuevo.to_excel(archivo, index=False)
+        st.success(f"Registrado como {clase}")
 
-    if submit:
-        st.success("Registrado correctamente.")
-        # Aquí va tu lógica de guardado en Excel...
+# --- REPORTE DIARIO ---
+if os.path.exists("aprobados.xlsx"):
+    df_aprobados = pd.read_excel("aprobados.xlsx")
+    st.subheader("📈 Reporte Diario")
+    st.metric("Promedio Humedad", f"{df_aprobados['Humedad'].mean():.2f}%")
