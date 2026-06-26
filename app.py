@@ -1,62 +1,150 @@
 import streamlit as st
 import google.generativeai as genai
-from PIL import Image, ImageOps
+from PIL import Image
+from fpdf import FPDF
 from datetime import datetime
 import json
 import io
 import pandas as pd
 
-st.set_page_config(page_title="Registro Provencesa", layout="wide", page_icon="🌾")
-
-# --- CONFIGURACIÓN DE SEGURIDAD ---
+# --- CONFIGURACIÓN DE IA ---
 try:
-    # Asegúrate de que esta variable coincida exactamente con lo que pusiste en Secrets
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+    nombre_modelo = next((m for m in modelos if 'gemini-1.5-flash' in m), modelos[0])
+    model = genai.GenerativeModel(nombre_modelo)
 except Exception as e:
-    st.error(f"Error de configuración (Revisa los Secrets): {e}")
+    st.error(f"Error de configuración: {e}")
 
-# --- ESTADOS ---
-if 'historico' not in st.session_state: st.session_state.historico = []
-if 'datos_ia' not in st.session_state: st.session_state.datos_ia = {}
+# Configuración de página
+st.set_page_config(page_title="Registro de Información en Centros Externos Provencesa", layout="wide", page_icon="🌾")
 
-# --- SIDEBAR (Nombre y Fecha restaurados) ---
-with st.sidebar:
-    st.header("👤 Identificación")
-    nombre_analista = st.text_input("Tu Nombre", key="nombre")
-    fecha_hoy = st.date_input("Fecha de hoy", datetime.now())
-    st.divider()
-    archivo = st.file_uploader("Subir foto planilla", type=['jpg', 'jpeg', 'png'])
+# --- MEMORIA DE LA SESIÓN ---
+if 'historico' not in st.session_state:
+    st.session_state.historico = []
+if 'datos_ia' not in st.session_state:
+    st.session_state.datos_ia = {}
+if 'pdf_listo' not in st.session_state:
+    st.session_state.pdf_listo = None
+
+def procesar_planilla_con_ia(imagen_pil):
+    img_byte_arr = io.BytesIO()
+    imagen_pil.save(img_byte_arr, format='JPEG')
+    img_bytes = img_byte_arr.getvalue()
+    imagen_para_ia = {"mime_type": "image/jpeg", "data": img_bytes}
     
-    if archivo and st.button("🤖 LEER PLANILLA"):
-        with st.spinner("Analizando..."):
-            try:
-                img_pil = ImageOps.exif_transpose(Image.open(archivo))
-                img_byte_arr = io.BytesIO()
-                img_pil.save(img_byte_arr, format='JPEG')
-                prompt = "Extrae los 21 ítems. Responde SOLO en JSON: {'items': {'01': 'val', ..., '21': 'val'}}"
-                response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": img_byte_arr.getvalue()}])
-                res = json.loads(response.text.replace('```json', '').replace('```', '').strip())
-                st.session_state.datos_ia = res.get("items", {})
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error: {e}")
+    prompt = """Analiza la planilla de Alimentos Polar. Extrae:
+    cabecera: (analista, procedencia, placa, silo, destino, contrato, cereal, documento)
+    items: (valores del 01 al 20). 
+    Devuelve SOLO el JSON. Si algo no es legible pon 0.0."""
+    
+    response = model.generate_content([prompt, imagen_para_ia])
+    texto = response.text.strip()
+    inicio, fin = texto.find('{'), texto.rfind('}') + 1
+    return json.loads(texto[inicio:fin])
 
-# --- FORMULARIO ---
-st.title("🌾 Registro de Calidad Provencesa")
-if not nombre_analista:
-    st.warning("Por favor, coloca tu nombre en la barra lateral.")
-else:
-    with st.form("registro_maestro"):
-        st.subheader(f"Analista: {nombre_analista} | Fecha: {fecha_hoy}")
-        cols = st.columns(3)
-        respuestas = {}
-        for i in range(21):
-            idx = f"{i+1:02d}"
-            with cols[i % 3]:
-                respuestas[idx] = st.text_input(f"Ítem {idx}", value=str(st.session_state.datos_ia.get(idx, "0")))
+st.title("🌾 Registro de Información en Centros Externos Provencesa")
+
+# --- 1. PANEL DE ESTADÍSTICAS (ARRIBA) ---
+if st.session_state.historico:
+    df_hist = pd.DataFrame(st.session_state.historico)
+    st.subheader("📊 Resumen de Jornada")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Vehículos", len(df_hist))
+    m2.metric("✅ Aprobados", len(df_hist[df_hist['Estatus'] == 'Aprobado']))
+    m3.metric("❌ Rechazados", len(df_hist[df_hist['Estatus'] == 'Rechazado']))
+    m4.metric("💧 Prom. Humedad", f"{df_hist['Humedad'].mean():.2f}%")
+    st.divider()
+
+# --- 2. SIDEBAR (ESCÁNER) ---
+with st.sidebar:
+    st.header("📸 Escáner de Planilla")
+    archivo = st.file_uploader("Subir foto", type=['jpg', 'jpeg', 'png'])
+    if archivo:
+        img_pil = Image.open(archivo)
+        st.image(img_pil, use_container_width=True)
+        if st.button("🤖 LEER PLANILLA"):
+            with st.spinner("IA Procesando..."):
+                try:
+                    st.session_state.datos_ia = procesar_planilla_con_ia(img_pil)
+                    st.success("¡Lectura completada!")
+                except: st.error("Error al leer. Reintente.")
+
+# --- 3. FORMULARIO COMPLETO ---
+d = st.session_state.datos_ia
+cabe = d.get('cabecera', {})
+items = d.get('items', {})
+
+with st.form("registro_maestro"):
+    st.subheader("📋 Datos del Encabezado")
+    c1, c2, c3, c4 = st.columns(4)
+    f_analista = c1.text_input("Analista", value=cabe.get('analista', ''))
+    f_procedencia = c2.text_input("Procedencia", value=cabe.get('procedencia', ''))
+    f_placa = c3.text_input("Placa", value=cabe.get('placa', ''))
+    f_silo = c4.text_input("Silo", value=cabe.get('silo', ''))
+    
+    c5, c6, c7, c8 = st.columns(4)
+    f_destino = c5.text_input("Destino", value=cabe.get('destino', ''))
+    f_contrato = c6.text_input("Contrato", value=cabe.get('contrato', ''))
+    f_cereal = c7.text_input("Cereal", value=cabe.get('cereal', ''))
+    f_doc = c8.text_input("Documento", value=cabe.get('documento', ''))
+
+    st.divider()
+    st.subheader("🔬 Resultados del Análisis Físico")
+    nombres = ["Humedad", "Impureza", "Germen Dañado", "Dañado Calor", "Dañado Insecto", 
+               "Infectados", "Total Dañados", "Partidos Peq.", "Granos Part.", "Total Part.",
+               "Cristalizados", "Mezcla Color", "Peso Vol", "Color", "Olor", "Aflatoxina",
+               "Insectos V.", "Quemados", "Sensorial", "Semillas Obj."]
+    
+    respuestas = {}
+    cols = st.columns(4)
+    for i in range(1, 21):
+        idx = str(i).zfill(2)
+        with cols[(i-1)%4]:
+            val_ia = items.get(idx, 0.0)
+            try: val_final = float(str(val_ia).replace(',','.'))
+            except: val_final = 0.0
+            respuestas[nombres[i-1]] = st.number_input(f"{idx}. {nombres[i-1]}", value=val_final)
+
+    st.divider()
+    st.subheader("📢 Decisión Final")
+    cd1, cd2 = st.columns(2)
+    f_estatus = cd1.radio("Estatus del Vehículo:", ["Aprobado", "Rechazado"], horizontal=True)
+    f_motivo = cd2.text_input("Motivo de Rechazo (si aplica):")
+
+    if st.form_submit_button("✅ REGISTRAR VEHÍCULO Y GENERAR REPORTE"):
+        # Acumular en historial
+        nuevo = {
+            "Fecha": datetime.now().strftime("%H:%M"), "Placa": f_placa,
+            "Cereal": f_cereal, "Humedad": respuestas["Humedad"],
+            "Estatus": f_estatus, "Motivo": f_motivo if f_estatus == "Rechazado" else "N/A"
+        }
+        st.session_state.historico.append(nuevo)
         
-        submitted = st.form_submit_button("✅ REGISTRAR VEHÍCULO")
-        if submitted:
-            st.success("¡Datos registrados!")
+        # Generar PDF
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", 'B', 16)
+        pdf.cell(200, 10, "REPORTE DE CALIDAD - PROVENCESA", ln=True, align='C')
+        pdf.set_font("Arial", '', 11)
+        pdf.ln(5)
+        pdf.cell(0, 10, f"Placa: {f_placa} | Estatus: {f_estatus} | Analista: {f_analista}", ln=True)
+        pdf.ln(5)
+        for k, v in respuestas.items():
+            pdf.cell(60, 8, f"{k}: {v}", 1, 0)
+            if list(respuestas.keys()).index(k) % 3 == 2: pdf.ln(8)
+        
+        st.session_state.pdf_listo = pdf.output(dest='S').encode('latin-1')
+        st.rerun()
+
+# --- 4. ACCIONES POST-REGISTRO ---
+if st.session_state.pdf_listo:
+    st.download_button("📥 Descargar Reporte PDF del último vehículo", st.session_state.pdf_listo, "reporte.pdf", "application/pdf")
+
+if st.session_state.historico:
+    st.subheader("📋 Historial de Vehículos Registrados")
+    st.dataframe(pd.DataFrame(st.session_state.historico), use_container_width=True)
+    if st.button("🗑️ Limpiar Historial"):
+        st.session_state.historico = []
+        st.rerun()
