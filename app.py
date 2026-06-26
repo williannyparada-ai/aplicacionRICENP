@@ -10,10 +10,14 @@ st.set_page_config(page_title="Sistema Provencesa", layout="wide", page_icon="�
 
 # --- 1. CONFIGURACIÓN IA ---
 try:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    model = genai.GenerativeModel('gemini-1.5-flash')
-except:
-    st.error("Error: Configura tu GOOGLE_API_KEY en los Secrets de Streamlit.")
+    # Intenta obtener la API KEY de los secrets
+    api_key = st.secrets["GOOGLE_API_KEY"]
+    genai.configure(api_key=api_key)
+    # Usamos la versión 'latest' para mayor compatibilidad
+    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+except Exception as e:
+    st.error(f"Error de configuración de IA: {e}")
+    st.stop()
 
 # --- 2. LOGUEO (Barra Lateral) ---
 with st.sidebar:
@@ -27,10 +31,15 @@ if not nombre_analista:
 
 # --- 3. LÓGICA COVENIN ---
 def clasificar_covenin(d):
-    # Basado en tu tabla: I, II, III
-    if d["Total Dañados"] <= 6 and d["Impureza"] <= 2 and d["Total Part."] <= 3: return "CLASE I"
-    elif d["Total Dañados"] <= 8 and d["Impureza"] <= 2 and d["Total Part."] <= 5: return "CLASE II"
-    else: return "CLASE III"
+    # Lógica según tabla COVENIN 1935:2017
+    # Clase I: Dañados <= 6, Impurezas <= 2, Partidos <= 3
+    # Clase II: Dañados <= 8, Impurezas <= 2, Partidos <= 5
+    if d["Total Dañados"] <= 6 and d["Impureza"] <= 2 and d["Total Part."] <= 3: 
+        return "CLASE I"
+    elif d["Total Dañados"] <= 8 and d["Impureza"] <= 2 and d["Total Part."] <= 5: 
+        return "CLASE II"
+    else: 
+        return "CLASE III"
 
 # --- 4. GESTIÓN DE SESIÓN ---
 if 'aprobados' not in st.session_state: st.session_state.aprobados = pd.DataFrame()
@@ -46,14 +55,15 @@ if archivo_foto:
     img = Image.open(archivo_foto)
     st.image(img, caption="Planilla capturada", use_container_width=True)
     if st.button("🤖 Procesar con IA"):
-        with st.spinner("Leyendo planilla..."):
-            prompt = "Extrae de la imagen: Humedad, Total Dañados, Impureza, Total Partidos. Devuelve solo un JSON."
-            response = model.generate_content([prompt, img])
+        with st.spinner("Analizando con Gemini..."):
             try:
-                datos_ia = json.loads(response.text)
+                prompt = "Extrae de la imagen los siguientes datos y devuelve un JSON: {'Humedad': float, 'Total Dañados': float, 'Impureza': float, 'Total Part.': float}"
+                response = model.generate_content([prompt, img])
+                texto_limpio = response.text.replace('```json', '').replace('```', '')
+                datos_ia = json.loads(texto_limpio)
                 st.success("¡Lectura exitosa!")
-            except:
-                st.error("No se pudo leer la planilla automáticamente. Rellena los datos manualmente.")
+            except Exception as e:
+                st.error(f"Error procesando imagen: {e}. Por favor, ingresa los datos manualmente.")
 
 with st.form("registro"):
     placa = st.text_input("Placa del Vehículo")
