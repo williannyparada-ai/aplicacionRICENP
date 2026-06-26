@@ -1,79 +1,67 @@
 import streamlit as st
 import requests
 import pandas as pd
-import os
 import re
 from datetime import datetime
 
-st.set_page_config(page_title="App Calidad Provencesa", layout="wide", page_icon="🌾")
+st.set_page_config(page_title="App Calidad", layout="wide")
 
-# --- CONFIGURACIÓN ---
 API_KEY = "K83381284588957"
 
-if 'datos_extraidos' not in st.session_state: st.session_state.datos_extraidos = {}
+if 'datos_finales' not in st.session_state:
+    st.session_state.datos_finales = {}
 
-st.title("🌾 Registro de Calidad - Provencesa")
-
-# --- FUNCIÓN DE EXTRACCIÓN ROBUSTA ---
-def extraer_todo(texto):
+def extraer_datos_precisos(texto):
+    """Extrae valores buscando específicamente después de cada etiqueta."""
     resultados = {}
-    nombres = ["Humedad", "Impureza", "Germen Dañado", "Dañado Calor", "Dañado Insecto", "Infectados", 
-               "Total Dañados", "Partidos Peq.", "Granos partidos", "Total Granos partidos", "Cristalizados", 
-               "Mezcla de Color", "Peso Volumetrico", "Color", "Olor", "Aflatoxina", "Insectos Vivos", 
-               "Granos Quemados", "Sensorial", "Semillas Obj."]
     
-    for nombre in nombres:
-        # Busca el nombre del campo, y luego busca el primer número (decimal o entero) que aparece después
-        # .*? significa "cualquier cosa hasta encontrar lo siguiente"
-        patron = rf"{nombre}.*?(\d+[.,]\d+)"
+    # Diccionario de mapeo: Nombre del campo -> Regex para encontrar su valor
+    # Usamos patrones que buscan la etiqueta y el número justo al lado o abajo
+    mapeo = {
+        "Humedad": r"Humedad.*?(\d+[\.,]\d+)",
+        "Impureza": r"Impureza.*?(\d+[\.,]\d+)",
+        "Germen Dañado": r"Germen Dañado.*?(\d+[\.,]\d+)",
+        "Dañado Calor": r"Dañado por Calor.*?(\d+[\.,]\d+)",
+        "Dañado Insecto": r"Dañado por Insectos.*?(\d+[\.,]\d+)",
+        "Infectados": r"Granos Infectados.*?(\d+[\.,]\d+)",
+        "Total Dañados": r"Total de Granos Dañados.*?(\d+[\.,]\d+)",
+        "Partidos Peq.": r"Granos Partido Pequeños.*?(\d+[\.,]\d+)",
+        "Granos partidos": r"Granos partidos.*?(\d+[\.,]\d+)",
+        "Total Granos partidos": r"Total Granos partidos.*?(\d+[\.,]\d+)",
+        "Cristalizados": r"Granos Cristalizados.*?(\d+[\.,]\d+)",
+        "Mezcla de Color": r"Mezcla de Color.*?(\d+[\.,]\d+)",
+        "Peso Volumetrico": r"Peso Volumetrico.*?(\d+[\.,]\d+)",
+    }
+    
+    for campo, patron in mapeo.items():
         match = re.search(patron, texto, re.IGNORECASE | re.DOTALL)
         if match:
-            valor = match.group(1).replace(',', '.')
-            resultados[nombre] = float(valor)
+            resultados[campo] = float(match.group(1).replace(',', '.'))
     return resultados
 
-# --- BARRA LATERAL ---
+# --- INTERFAZ ---
 with st.sidebar:
-    archivo = st.file_uploader("Subir planilla (JPG/PNG)", type=['jpg', 'jpeg', 'png'])
-    if archivo and st.button("🚀 PROCESAR PLANILLA"):
-        with st.spinner("Procesando imagen..."):
-            payload = {'apikey': API_KEY, 'language': 'spa', 'isOverlayRequired': False}
-            files = {'file': (archivo.name, archivo.getvalue())}
-            try:
-                res = requests.post('https://api.ocr.space/parse/image', files=files, data=payload).json()
-                if not res.get("IsErroredOnProcessing"):
-                    texto_ocr = res["ParsedResults"][0]["ParsedText"]
-                    st.session_state.datos_extraidos = extraer_todo(texto_ocr)
-                    st.session_state.texto_crudo = texto_ocr # Para debug
-                    st.success("¡Datos detectados!")
-                else:
-                    st.error("Error al procesar.")
-            except Exception as e:
-                st.error(f"Error: {e}")
+    archivo = st.file_uploader("Subir imagen", type=['jpg', 'jpeg', 'png'])
+    if archivo and st.button("🚀 PROCESAR"):
+        with st.spinner("Leyendo con precisión..."):
+            res = requests.post('https://api.ocr.space/parse/image', 
+                                files={'file': (archivo.name, archivo.getvalue())}, 
+                                data={'apikey': API_KEY, 'language': 'spa'}).json()
+            
+            if "ParsedResults" in res:
+                texto = res["ParsedResults"][0]["ParsedText"]
+                st.session_state.datos_finales = extraer_datos_precisos(texto)
+                st.rerun()
 
-# --- FORMULARIO ---
-with st.form("registro_maestro"):
-    # Restauramos cabecera
-    c1, c2, c3 = st.columns(3)
-    analista = c1.text_input("Analista")
-    fecha = c2.date_input("Fecha", datetime.now())
-    procedencia = c3.text_input("Procedencia")
-    
-    st.subheader("🔬 Resultados")
-    nombres = ["Humedad", "Impureza", "Germen Dañado", "Dañado Calor", "Dañado Insecto", "Infectados", "Total Dañados", "Partidos Peq.", "Granos partidos", "Total Granos partidos", "Cristalizados", "Mezcla de Color", "Peso Volumetrico", "Color", "Olor", "Aflatoxina", "Insectos Vivos", "Granos Quemados", "Sensorial", "Semillas Obj."]
-    
+with st.form("registro"):
     cols = st.columns(4)
-    respuestas = {}
+    nombres = ["Humedad", "Impureza", "Germen Dañado", "Dañado Calor", "Dañado Insecto", 
+               "Infectados", "Total Dañados", "Partidos Peq.", "Granos partidos", 
+               "Total Granos partidos", "Cristalizados", "Mezcla de Color", "Peso Volumetrico"]
+    
     for i, nombre in enumerate(nombres):
         with cols[i%4]:
-            # El valor viene de la extracción o es 0.0
-            val_default = st.session_state.datos_extraidos.get(nombre, 0.0)
-            respuestas[nombre] = st.number_input(f"{i+1}. {nombre}", value=float(val_default), format="%.2f")
-
-    if st.form_submit_button("✅ REGISTRAR"):
-        st.success("Registro guardado exitosamente.")
-
-# --- DEBUG ---
-with st.expander("Ver texto crudo (para depuración)"):
-    if 'texto_crudo' in st.session_state:
-        st.text(st.session_state.texto_crudo)
+            val = st.session_state.datos_finales.get(nombre, 0.0)
+            st.number_input(f"{i+1}. {nombre}", value=val, format="%.2f")
+    
+    st.form_submit_button("✅ REGISTRAR")
