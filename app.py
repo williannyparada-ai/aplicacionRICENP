@@ -7,84 +7,87 @@ import json
 import io
 import pandas as pd
 
-# Configuración de la página
 st.set_page_config(page_title="Registro Provencesa", layout="wide", page_icon="🌾")
 
-# Configuración de IA con selección automática de modelo
+# --- CONFIGURACIÓN IA ---
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    # Intentamos listar modelos disponibles y usar uno compatible
-    modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-    # Intentamos buscar gemini-1.5-flash, si no, tomamos el primero que funcione
-    nombre_modelo = next((m for m in modelos if 'gemini-1.5-flash' in m), modelos[0] if modelos else 'gemini-pro')
-    model = genai.GenerativeModel(nombre_modelo)
+    # Intentamos conectar con el modelo más capaz
+    model = genai.GenerativeModel('gemini-1.5-flash')
 except Exception as e:
-    st.error(f"Error de conexión con la IA: {e}")
+    st.error(f"Error de configuración: {e}")
 
-# Memoria de sesión
+# --- ESTADOS ---
 if 'historico' not in st.session_state: st.session_state.historico = []
 if 'datos_ia' not in st.session_state: st.session_state.datos_ia = {}
 
-def procesar_con_ia(img_pil):
+# Lista de los 21 ítems definidos
+ITEMS_CALIDAD = [
+    "01. Humedad", "02. Impureza", "03. Germen Dañado", "04. Dañado Calor", "05. Dañado Insecto",
+    "06. Infectados", "07. Total Dañados", "08. Part. Pequeños", "09. Granos Partidos", "10. Total Part.",
+    "11. Cristalizados", "12. Mezcla Color", "13. Peso Vol", "14. Color", "15. Olor",
+    "16. Aflatoxina", "17. Insectos V.", "18. Quemados", "19. Sensorial", "20. Semillas Obj.",
+    "21. Fumonisina"
+]
+
+def procesar_planilla(img_pil):
     img_byte_arr = io.BytesIO()
     img_pil.save(img_byte_arr, format='JPEG')
-    prompt = "Extrae los datos de esta planilla de inspección. Devuelve un JSON plano con claves: {'Humedad': float, 'Impureza': float, 'Total Dañados': float, 'Total Part.': float}"
+    # Prompt optimizado para extraer los 21 puntos
+    prompt = """Analiza esta planilla de control de calidad. 
+    Extrae los valores numéricos de los 21 ítems enumerados (incluyendo Fumonisina al final).
+    Si un valor es texto (ej: 'N', 'II'), ponlo como texto.
+    Devuelve estrictamente un JSON con formato: 
+    {"items": {"01": valor, "02": valor, ..., "21": valor}}."""
+    
     response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": img_byte_arr.getvalue()}])
-    # Limpiamos la respuesta para asegurar que sea solo JSON
     texto = response.text.replace('```json', '').replace('```', '').strip()
     return json.loads(texto)
 
-# Sidebar: Identificación y Escáner
+# --- UI ---
+st.title("🌾 Registro de Calidad Provencesa")
+
 with st.sidebar:
-    st.header("👤 Identificación")
-    nombre_analista = st.text_input("Tu Nombre")
-    f_fecha = st.date_input("Fecha de hoy", datetime.now())
+    st.header("📸 Escáner")
     archivo = st.file_uploader("Subir foto planilla", type=['jpg', 'jpeg', 'png'])
-    
     if archivo:
         img_pil = ImageOps.exif_transpose(Image.open(archivo))
         st.image(img_pil, use_container_width=True)
-        if st.button("🤖 LEER PLANILLA"):
-            with st.spinner("Procesando con IA..."):
+        if st.button("🤖 LEER LOS 21 ÍTEMS"):
+            with st.spinner("Analizando 21 puntos..."):
                 try:
-                    st.session_state.datos_ia = procesar_con_ia(img_pil)
-                    st.rerun() # Recargamos para que los campos se llenen
-                except Exception as e: 
-                    st.error(f"Error al leer: {e}")
+                    resultado = procesar_planilla(img_pil)
+                    st.session_state.datos_ia = resultado.get("items", {})
+                    st.success("¡Lectura completa!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
-# Formulario principal
-st.title("🌾 Registro de Calidad Provencesa")
-if not nombre_analista:
-    st.warning("Por favor, ingresa tu nombre en la barra lateral.")
-    st.stop()
-
-d = st.session_state.datos_ia
+# --- FORMULARIO DINÁMICO ---
+datos = st.session_state.datos_ia
 with st.form("registro_maestro"):
-    f_placa = st.text_input("Placa")
+    st.subheader("🔬 Resultados de Análisis (21 Ítems)")
     
-    col1, col2 = st.columns(2)
-    respuestas = {
-        "Humedad": col1.number_input("Humedad (%)", value=float(d.get("Humedad", 0.0))),
-        "Impureza": col2.number_input("Impureza (%)", value=float(d.get("Impureza", 0.0))),
-        "Total Dañados": col1.number_input("Total Dañados (%)", value=float(d.get("Total Dañados", 0.0))),
-        "Total Part.": col2.number_input("Total Part. (%)", value=float(d.get("Total Part.", 0.0)))
-    }
-    
+    cols = st.columns(3)
+    respuestas = {}
+    for i, nombre in enumerate(ITEMS_CALIDAD):
+        idx = str(i+1).zfill(2)
+        val = datos.get(idx, 0.0)
+        with cols[i % 3]:
+            respuestas[nombre] = st.text_input(nombre, value=val)
+
+    st.divider()
     f_estatus = st.radio("Decisión:", ["Aprobado", "Rechazado"], horizontal=True)
-    f_motivo = st.text_input("Motivo de rechazo (si aplica):")
+    f_motivo = st.text_input("Motivo de rechazo:")
     
-    # Este botón es vital para que el formulario funcione
-    submit = st.form_submit_button("✅ REGISTRAR")
+    if st.form_submit_button("✅ REGISTRAR VEHÍCULO"):
+        nuevo = {"Fecha": datetime.now().strftime("%Y-%m-%d"), **respuestas, "Estatus": f_estatus}
+        st.session_state.historico.append(nuevo)
+        st.success("Registrado correctamente.")
+        st.rerun()
 
-if submit:
-    nuevo = {"Fecha": str(f_fecha), "Analista": nombre_analista, "Placa": f_placa, **respuestas, "Estatus": f_estatus}
-    st.session_state.historico.append(nuevo)
-    st.success("¡Vehículo registrado correctamente!")
-    st.rerun()
-
-# Historial y descarga
+# --- HISTORIAL ---
 if st.session_state.historico:
     df = pd.DataFrame(st.session_state.historico)
-    st.subheader("📋 Historial")
-    st.dataframe(df)
-    st.download_button("📥 Descargar Excel", df.to_csv(index=False), "registros.csv")
+    st.dataframe(df, use_container_width=True)
+    st.download_button("📥 Descargar Excel", df.to_csv(index=False), "reporte_calidad.csv")
