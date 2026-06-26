@@ -11,12 +11,12 @@ st.set_page_config(page_title="App Calidad Provencesa", layout="wide", page_icon
 # --- CONFIGURACIÓN IA ---
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-    model = genai.GenerativeModel(modelos[0]) if modelos else None
+    model = genai.GenerativeModel('gemini-1.5-flash')
 except: model = None
 
 # --- ESTADO ---
-if 'datos_ia' not in st.session_state: st.session_state.datos_ia = {'items': {}}
+if 'datos_ia' not in st.session_state: 
+    st.session_state.datos_ia = {'cabecera': {}, 'items': {}}
 
 st.title("🌾 Registro de Calidad - Provencesa")
 
@@ -24,9 +24,14 @@ st.title("🌾 Registro de Calidad - Provencesa")
 with st.sidebar:
     archivo = st.file_uploader("Subir planilla", type=['jpg', 'jpeg', 'png'])
     if archivo and model and st.button("🤖 PROCESAR"):
-        with st.spinner("Extrayendo datos..."):
+        with st.spinner("Extrayendo todos los datos..."):
             try:
-                prompt = 'Extrae los 20 datos en JSON plano: {"items": {"01": 0.0, ...}}. Solo JSON.'
+                # Prompt mejorado para capturar toda la info
+                prompt = """Extrae los datos de esta planilla en JSON plano.
+                Estructura: {
+                    "cabecera": {"Procedencia":"", "Destino":"", "Contrato":"", "Cereal":"", "Documento":"", "Placa":"", "Silo":""},
+                    "items": {"01": 0.0, "02": 0.0, ...}
+                }"""
                 res = model.generate_content([prompt, Image.open(archivo)])
                 texto_limpio = res.text.replace('```json', '').replace('```', '').strip()
                 st.session_state.datos_ia = json.loads(texto_limpio)
@@ -34,8 +39,26 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"Error: {e}")
 
-# --- FORMULARIO DE REGISTRO ---
+# --- FORMULARIO ---
 with st.form("registro_maestro"):
+    # Cabecera
+    cab = st.session_state.datos_ia.get('cabecera', {})
+    c1, c2, c3 = st.columns(3)
+    analista = c1.text_input("Analista", "")
+    fecha = c2.date_input("Fecha", datetime.now())
+    procedencia = c3.text_input("Procedencia", cab.get("Procedencia", ""))
+    
+    c4, c5, c6, c7 = st.columns(4)
+    destino = c4.text_input("Destino", cab.get("Destino", ""))
+    contrato = c5.text_input("N Contrato", cab.get("Contrato", ""))
+    cereal = c6.text_input("Cereal", cab.get("Cereal", ""))
+    documento = c7.text_input("Documento", cab.get("Documento", ""))
+    
+    c8, c9 = st.columns(2)
+    placa = c8.text_input("Placa Vehículo", cab.get("Placa", ""))
+    silo = c9.text_input("Silo", cab.get("Silo", ""))
+
+    # Resultados
     items = st.session_state.datos_ia.get('items', {})
     nombres = ["Humedad", "Impureza", "Germen Dañado", "Dañado Calor", "Dañado Insecto", "Infectados", "Total Dañados", "Partidos Peq.", "Granos Part.", "Total Part.", "Cristalizados", "Mezcla Color", "Peso Vol", "Color", "Olor", "Aflatoxina", "Insectos V.", "Quemados", "Sensorial", "Semillas Obj."]
     
@@ -44,27 +67,28 @@ with st.form("registro_maestro"):
     for i in range(20):
         with cols[i%4]:
             val = items.get(str(i+1).zfill(2), 0.0)
-            try: valor = float(val)
-            except: valor = 0.0
-            respuestas[nombres[i]] = st.number_input(f"{i+1}. {nombres[i]}", value=valor)
+            respuestas[nombres[i]] = st.number_input(f"{i+1}. {nombres[i]}", value=float(val))
 
-    # Selección manual de estatus
     estatus = st.radio("Estatus:", ["Aprobado", "Rechazado"], horizontal=True)
     
-    if st.form_submit_button("✅ REGISTRAR Y GUARDAR"):
-        # Guardar en archivo según la elección del usuario
+    if st.form_submit_button("✅ REGISTRAR"):
+        # Crear registro alineado a tu tabla
+        registro = {
+            "Fecha": str(fecha), "Analista": analista, "Procedencia": procedencia, "Destino": destino,
+            "Contrato": contrato, "Cereal": cereal, "Documento": documento, "Placa": placa, "Silo": silo,
+            **respuestas, "Estatus": estatus
+        }
+        
         archivo_exc = "aprobados.xlsx" if estatus == "Aprobado" else "rechazados.xlsx"
-        df_nuevo = pd.DataFrame([{**respuestas, "Fecha": str(datetime.now().date()), "Estatus": estatus}])
+        df_nuevo = pd.DataFrame([registro])
         
         if os.path.exists(archivo_exc):
             pd.concat([pd.read_excel(archivo_exc), df_nuevo], ignore_index=True).to_excel(archivo_exc, index=False)
         else:
             df_nuevo.to_excel(archivo_exc, index=False)
-            
-        st.success(f"Registro guardado exitosamente en **{archivo_exc}**")
+        st.success("Guardado correctamente.")
 
 # --- DESCARGAS ---
-st.divider()
 for ar in ["aprobados.xlsx", "rechazados.xlsx"]:
     if os.path.exists(ar):
         with open(ar, "rb") as f:
