@@ -13,22 +13,23 @@ try:
     api_key = st.secrets["GOOGLE_API_KEY"]
     genai.configure(api_key=api_key)
     
-    # Intentamos conectar con el modelo estándar
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # Obtenemos la lista real de modelos disponibles para tu API KEY
+    modelos_disponibles = genai.list_models()
     
-    # Prueba de conexión rápida
-    # Si esta línea falla, el bloque 'except' la atrapará
-    model.generate_content("Hola") 
+    # Filtramos para encontrar uno que sirva para generar contenido (visión)
+    modelos_vision = [m.name for m in modelos_disponibles if 'generateContent' in m.supported_generation_methods]
     
+    if modelos_vision:
+        # Usamos el primero de la lista que sea compatible
+        nombre_modelo = modelos_vision[0]
+        model = genai.GenerativeModel(nombre_modelo)
+        st.sidebar.success(f"Modelo conectado: {nombre_modelo}")
+    else:
+        st.error("Tu API KEY no tiene acceso a modelos con capacidad de visión (generateContent).")
+        st.write("Modelos disponibles detectados:", modelos_vision)
+
 except Exception as e:
-    st.error(f"Error de conexión con Gemini: {e}")
-    st.warning("Intentando cambiar a 'gemini-1.0-pro'...")
-    try:
-        # Fallback al modelo anterior si el 1.5 falla
-        model = genai.GenerativeModel('gemini-1.0-pro')
-    except Exception as e2:
-        st.error(f"Error crítico: No se pudo conectar a ningún modelo. Verifica tu API Key. Detalles: {e2}")
-        model = None
+    st.error(f"Error crítico de conexión con Gemini: {e}")
 
 # --- LÓGICA COVENIN ---
 def determinar_clase(d):
