@@ -9,27 +9,37 @@ import time
 
 st.set_page_config(page_title="App Calidad Provencesa", layout="wide", page_icon="🌾")
 
-# --- 1. CONFIGURACIÓN ---
+# --- 1. CONFIGURACIÓN DINÁMICA DEL MODELO ---
 try:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    model = genai.GenerativeModel('gemini-1.5-flash') # Modelo optimizado para velocidad
-except: model = None
+    # Esto busca qué modelos tienes permitidos realmente
+    modelos_disponibles = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+    
+    if modelos_disponibles:
+        # Selecciona el primero que encuentre (ej: gemini-1.5-flash o gemini-pro)
+        model = genai.GenerativeModel(modelos_disponibles[0])
+        st.sidebar.info(f"Modelo activo: {modelos_disponibles[0]}")
+    else:
+        st.error("No se encontraron modelos compatibles.")
+        model = None
+except Exception as e:
+    st.error(f"Error de configuración: {e}")
+    model = None
 
 if 'datos_ia' not in st.session_state: 
     st.session_state.datos_ia = {'cabecera': {}, 'items': {}}
 
 st.title("🌾 Registro de Calidad - Provencesa")
 
-# --- 2. BARRA LATERAL (PROCESAR Y LIMPIAR) ---
+# --- 2. BARRA LATERAL ---
 with st.sidebar:
-    st.write("Modelo: gemini-1.5-flash")
     archivo = st.file_uploader("Subir planilla", type=['jpg', 'jpeg', 'png'])
     
     if archivo and model and st.button("🤖 PROCESAR PLANILLA"):
-        with st.spinner("Procesando con reintento automático..."):
+        with st.spinner("Procesando..."):
             prompt = 'Extrae los 20 datos en JSON plano. Estructura: {"cabecera": {"Procedencia":"", "Destino":"", "Contrato":"", "Documento":"", "Placa":"", "Silo":""}, "items": {"01": 0.0, ...}}'
             
-            # Lógica de Reintento (hasta 3 veces si hay error de cuota)
+            # Reintento automático
             for intento in range(3):
                 try:
                     res = model.generate_content([prompt, Image.open(archivo)])
@@ -39,9 +49,9 @@ with st.sidebar:
                     break 
                 except Exception as e:
                     if "429" in str(e) and intento < 2:
-                        time.sleep(10) # Espera 10 segundos y reintenta
+                        time.sleep(10)
                     else:
-                        st.error(f"Error tras reintentos: {e}")
+                        st.error(f"Error: {e}")
                         break
 
     st.divider()
